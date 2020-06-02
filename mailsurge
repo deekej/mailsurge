@@ -44,10 +44,10 @@ EXIT_CODES = {
 STATUS_MSG = {
     'OK':      "OK: postfix queues are in normal state\n",
 
-    'WARN':    "WARN: some mail queues exceeding warning threshold " \
-               "[%s mails / %s mins]\n%s",
-    'CRIT':    "CRIT: some mail queues exceeding critical threshold " \
-               "[%s mails / %s mins]\n%s",
+    'WARN':    "WARN: some mail queues are exceeding warning threshold " \
+               "[%s mails / %s mins]\n\n%s",
+    'CRIT':    "CRIT: some mail queues are exceeding critical threshold " \
+               "[%s mails / %s mins]\n\n%s",
 
     'UNKNOWN': "UNKNOWN: qshape subcommand failed to execute\n",
     'MISSING': "%s: error: qshape is missing or is not an executable\n" % PROG,
@@ -64,8 +64,11 @@ POSTFIX_QUEUES = [
     'hold',
 ]
 
-SURGES_TEMPLATE_HEADER = "%+16s%+10s%+10s" % ('QUEUE NAME', 'WARN', 'CRIT')
-SURGES_TEMPLATE = "%+16s%10i%10i\n"
+SURGES_TEMPLATE_HEADER = "%+10s: | %+21s | %+19s" \
+                         % ('QUEUE NAME',
+                            'MAILS: TOTAL / NEWEST',
+                            'SURGES: WARN / CRIT')
+SURGES_TEMPLATE = "%+10s  | %12i / %-6i | %12i / %-4i\n"
 
 # =====================================================================
 
@@ -378,8 +381,8 @@ class Queue(SimpleNamespace):
         self.__dict__.update(options.__dict__)
 
         self.mails = 0          # total number of mails in the queue
+        self.newest = 0         # number of mails in first (newest) bucket
         self.oldest = 0         # number of mails in last (oldest) bucket
-        #self.newest = 0         # number of mails in first (newest) bucket
 
         self.surges = 0         # total number of surges
         self.surges_warn = 0    # number of warning surges
@@ -446,7 +449,7 @@ class Queue(SimpleNamespace):
             line = tmp_file.readline()
             sys.stdout.write(line)
 
-        print(" %s " % ('-' * (self.term_width - 2)))
+        sys.stdout.write("%s\n" % ('-' * self.term_width))
 
     # ----------------------------------
 
@@ -468,8 +471,8 @@ class Queue(SimpleNamespace):
                 buckets = tmp_file.readline().strip().split()[1:]
 
                 self.mails = int(buckets[0])
+                self.newest = int(buckets[1])
                 self.oldest = int(buckets[-1])
-                #self.newest = int(buckets[1])
 
                 # Check the buckets for surges:
                 for mails in buckets[1:-1]:
@@ -503,13 +506,19 @@ def get_status_str(status, queues_surged, options):
     surges_str = SURGES_TEMPLATE_HEADER
 
     if options.last_bucket:
-        surges_str += "      (# of surges in entire queue)\n"
+        surges_str += " [in entire queue]\n"
+        surges_str += "%s\n" % ('=' * 75)
     else:
         last_mins = options.interval_size * (options.buckets_num - 1)
-        surges_str += "      (# of surges in last %i minutes)\n" % last_mins
+        surges_str += " [in last %i minutes]\n" % last_mins
+        surges_str += "%s\n" % ('=' * 79)
+
+
 
     for queue in queues_surged:
         surges_str += SURGES_TEMPLATE % (queue.name,
+                                         queue.mails,
+                                         queue.newest,
                                          queue.surges_warn,
                                          queue.surges_crit)
 
