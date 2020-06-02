@@ -55,7 +55,7 @@ STATUS_MSG = {
     'MISSING': "%s: error: qshape is missing or is not an executable\n" % PROG,
 
     #'ARGS':   is omitted intentionally - see the Params().process().
-    'SIGINT':  "TODO",
+    'SIGINT':  " Interrupted, exiting...\n",
 }
 
 POSTFIX_QUEUES = [
@@ -588,5 +588,5 @@ if __name__ == '__main__':
         sys.stdout.write(exit_msg)
         sys.exit(EXIT_CODES[exit_status])
     except KeyboardInterrupt:
-        sys.stdout.write('\n')
+        sys.stdout.write(STATUS_MSG['SIGINT'])
         sys.exit(EXIT_CODES['SIGINT'])
