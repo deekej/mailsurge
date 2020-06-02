@@ -369,6 +369,8 @@ class Queue(SimpleNamespace):
 
     # pylint: disable=too-many-instance-attributes
 
+    cmdline_base = None
+
     def __init__(self, name, options):
         """ TODO: DOCSTRING"""
 
@@ -384,20 +386,23 @@ class Queue(SimpleNamespace):
         self.surges_crit = 0    # number of critical surges
 
         # Prepare the cmdline list to be used with subprocess later:
-        self.cmdline = ['qshape']
+        if self.cmdline_base is None:
+            self.cmdline_base = ['qshape']
 
-        self.cmdline.extend(['-t', str(self.interval_size)])
-        self.cmdline.extend(['-b', str(self.buckets_num)])
-        self.cmdline.extend(['-w', str(self.term_width)])
+            self.cmdline_base.extend(['-t', str(self.interval_size)])
+            self.cmdline_base.extend(['-b', str(self.buckets_num)])
+            self.cmdline_base.extend(['-w', str(self.term_width)])
 
-        if self.origin_domain:
-            self.cmdline.append('-s')
+            if self.origin_domain:
+                self.cmdline_base.append('-s')
 
-        if self.linear_dist:
-            self.cmdline.append('-l')
+            if self.linear_dist:
+                self.cmdline_base.append('-l')
 
-        if self.conf_dir:
-            self.cmdline.extend(['-c', self.conf_dir])
+            if self.conf_dir:
+                self.cmdline_base.extend(['-c', self.conf_dir])
+
+        self.cmdline = self.cmdline_base
 
         # Postfix queue name is a last (positional) argument of qshape:
         self.cmdline.append(self.name)
