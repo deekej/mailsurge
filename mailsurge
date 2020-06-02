@@ -14,7 +14,7 @@ can work as nagios/icinga plugin for monitoring of sudden mails surges
 in postfix queues. See the '--help' for more info.
 """
 
-__version__ = '0.8'
+__version__ = '0.9'
 
 # =====================================================================
 
@@ -85,12 +85,32 @@ class Params():
 
     _help_descr = \
 """\
-TODO - description
+Check the status of postfix mail queues by parsing output of 'qshape'
+utility, and report their status in nagios / icinga compatible output.
 """
 
     _help_epilog = \
 """\
-TODO - epilogue
+This script is a simple wrapper for postfix's 'qshape' utility, which main
+purpose is monitoring of sudden mail surges in postfix queues.
+
+By default, only nagios / icinga compatible output is displayed upon running
+the script, and it uses default postfix configuration ['/etc/postfix/'].
+
+The linear distribution is used automatically, as it can provide more accurate
+results. It is possible to overwrite the settings to use geometric distribution,
+though it might produce less consistent results, especially if your 'deferred'
+or 'hold' queues contain a lot of mails...
+
+Because of this reason, the last bucket of the distribution (with the + sign)
+is not being checked by default, as it can skew the results as well. If needed,
+you can enable it with the '--linear' option.
+
+If the '--linear' option is used, then the warning / critical thresholds for
+the last (oldest) bucket are recalculated as: (buckets number) * (threshold)
+--------
+Website: https://github.com/deekej/mailsurge
+Any feedback, bug reports or patches are welcome! :)
 """
 
     queues = []
@@ -201,7 +221,7 @@ TODO - epilogue
 
         self._parser.add_argument(
             '--origin', '-o',
-            help='check originator domain distribution instead of recipient',
+            help="check originator domain distribution instead of recipient's",
             dest='origin_domain',
             action='store_true',
             default=False,
