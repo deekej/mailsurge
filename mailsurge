@@ -558,10 +558,12 @@ def main():
 # =====================================================================
 
 if __name__ == '__main__':
-    # TODO: Add try-except block for CTRL+C
+    try:
+        #pylint: disable=invalid-name
+        exit_status, exit_msg = main()
 
-    #pylint: disable=invalid-name
-    exit_status, exit_msg = main()
-
-    sys.stdout.write(exit_msg)
-    sys.exit(EXIT_CODES[exit_status])
+        sys.stdout.write(exit_msg)
+        sys.exit(EXIT_CODES[exit_status])
+    except KeyboardInterrupt:
+        sys.stdout.write('\n')
+        sys.exit(EXIT_CODES['SIGINT'])
