@@ -9,7 +9,9 @@
 # =====================================================================
 
 """\
-TODO: DOCSTRING
+This is a simple wrapper script for 'qshape' utility from postfix, which
+can work as nagios/icinga plugin for monitoring of sudden mails surges
+in postfix queues. See the '--help' for more info.
 """
 
 __version__ = '0.8'
@@ -73,9 +75,10 @@ SURGES_TEMPLATE = "%+10s  | %12i / %-6i | %12i / %-4i\n"
 # =====================================================================
 
 class Params():
-    """\
-    Auxiliary class for processing of cmdline arguments. The actual
-    processing is being done by calling the process() method.
+    """Auxiliary class for processing of cmdline arguments.
+
+    It prepares the necessary options for 'argparse', and processes
+    the command line options when the process() method is called.
     """
 
     # pylint: disable=too-few-public-methods
@@ -115,8 +118,8 @@ TODO - epilogue
 
     def __init__(self):
         """\
-        Initializes this class by preparing parser arguments so it can be
-        called later with Params.process() method.
+        Initializes this class by preparing the parser options,
+        so it can be called later with Params.process() method.
         """
 
         self._parser = argparse.ArgumentParser(
@@ -287,7 +290,7 @@ TODO - epilogue
 
     def _postfix_queue(self, qname):
         # pylint: disable=no-self-use
-        """Check if the specified queue name is a valid postfix queue."""
+        """Check if the specified queue is a valid postfix queue name."""
 
         if qname not in POSTFIX_QUEUES:
             msg = "%r is not a valid postfix queue name" % (qname)
@@ -299,7 +302,11 @@ TODO - epilogue
 
     def process(self):
         # pylint: disable=too-many-branches
-        """Runs the actual processing of the cmdline arguments."""
+        """Runs the actual processing of the cmdline arguments.
+
+        Once the processing has finished (and was successful), then the
+        options can be accessed directly as Params class attributes.
+        """
 
         try:
             # Update our dictionary with parser's dictionary directly:
@@ -366,16 +373,13 @@ TODO - epilogue
 # =====================================================================
 
 class Queue(SimpleNamespace):
-    """\
-    TODO: DOCSTRING
-    """
-
     # pylint: disable=too-many-instance-attributes
+    """Auxiliary class for obtaining & processing the queue contents."""
 
     cmdline_base = None
 
     def __init__(self, name, options):
-        """ TODO: DOCSTRING"""
+        """Prepares the instance attributes and qshape cmdline arguments."""
 
         self.name = name
         self.__dict__.update(options.__dict__)
@@ -416,7 +420,7 @@ class Queue(SimpleNamespace):
     # ----------------------------------
 
     def _check_surge(self, mails):
-        """ TODO: DOCSTRING"""
+        """Checks if the mails count exceeds warning or critical limit."""
 
         mails_num = int(mails)
 
@@ -426,11 +430,12 @@ class Queue(SimpleNamespace):
             self.surges_warn += 1
 
     def _display_queue(self, tmp_file):
-        """ TODO: DOCSTRING"""
+        """Pretty prints the qshape output if --verbose was used."""
 
         tmp_file.seek(0)
         header = tmp_file.readline()
 
+        # We need to add queue name to be able to distinguish between them:
         qname = "| %s QUEUE |" % self.name.upper()
 
         qname_len = len(qname)
@@ -438,6 +443,7 @@ class Queue(SimpleNamespace):
 
         ins_idx = (spaces_len - qname_len) // 2
 
+        # Are we able to fit in the whole queue name string?
         if ins_idx > 0:
             header = header[:ins_idx] + qname + header[ins_idx + qname_len:]
         else:
@@ -454,7 +460,7 @@ class Queue(SimpleNamespace):
     # ----------------------------------
 
     def process(self):
-        """ TODO: DOCSTRING """
+        """Calls the qshape in subprocess and parses its output."""
 
         try:
             with TempFile(mode='x+t', buffering=1, encoding='utf8',
@@ -496,7 +502,7 @@ class Queue(SimpleNamespace):
 # =====================================================================
 
 def get_status_str(status, queues_surged, options):
-    """ TODO: DOCSTRING"""
+    """Returns correct string based on status, surged queues and options."""
 
     if status == 'OK':
         return STATUS_MSG['OK']
@@ -532,7 +538,10 @@ def get_status_str(status, queues_surged, options):
 # =====================================================================
 
 def main():
-    """ TODO: DOCSTRING """
+    """\
+    Processes cmdline options, postfix queues, and returns correct status
+    message and status code.
+    """
 
     options = Params().process()
 
