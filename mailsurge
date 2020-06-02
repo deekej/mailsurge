@@ -549,10 +549,7 @@ def main():
     status_msg = None
 
     if shutil.which('qshape') is None:
-        status = 'MISSING'
-        status_msg = get_status_str(status, None, None)
-
-        return status, status_msg
+        return 'MISSING', get_status_str('MISSING', None, None)
 
     queues = []
     queues_surged = []
