@@ -66,12 +66,6 @@ POSTFIX_QUEUES = [
     'hold',
 ]
 
-SURGES_TEMPLATE_HEADER = "%+10s: | %+21s | %+19s" \
-                         % ('QUEUE NAME',
-                            'MAILS: TOTAL / NEWEST',
-                            'SURGES: WARN / CRIT')
-SURGES_TEMPLATE = "%+10s  | %12i / %-6i | %12i / %-4i\n"
-
 # =====================================================================
 
 class Params():
@@ -377,6 +371,7 @@ class Queue(SimpleNamespace):
     """Auxiliary class for obtaining & processing the queue contents."""
 
     cmdline_base = None
+    stats_header = None
 
     def __init__(self, name, options):
         """Prepares the instance attributes and qshape cmdline arguments."""
@@ -414,8 +409,25 @@ class Queue(SimpleNamespace):
         # Postfix queue name is a last (positional) argument of qshape:
         self.cmdline.append(self.name)
 
+        # Prepare the stats header string (for pretty print) in case we surge:
+        if self.stats_header is None:
+            self.stats_header = "%+10s: | %+21s | %+19s" \
+                % ('QUEUE NAME', 'MAILS: TOTAL / NEWEST', 'SURGES: WARN / CRIT')
+
+            if self.last_bucket:
+                self.stats_header += " [in entire queue]\n"
+                self.stats_header += "%s\n" % ('=' * 75)
+            else:
+                last_mins = self.interval_size * (self.buckets_num - 1)
+                self.stats_header += " [in last %i minutes]\n" % last_mins
+                self.stats_header += "%s\n" % ('=' * 79)
+
     def __str__(self):
-        return "%s (#%i)" % (self.name, self.surges)
+        """Returns properly formatted string with queue statistics"""
+
+        stats = "%+10s  | %12i / %-6i | %12i / %-4i\n"
+        return stats % (self.name, self.mails, self.newest,
+                        self.surges_warn, self.surges_crit)
 
     # ----------------------------------
 
@@ -501,7 +513,7 @@ class Queue(SimpleNamespace):
 
 # =====================================================================
 
-def get_status_str(status, queues_surged, options):
+def get_status_str(status, queues_surged):
     """Returns correct string based on status, surged queues and options."""
 
     if status == 'OK':
@@ -509,31 +521,18 @@ def get_status_str(status, queues_surged, options):
     if status == 'MISSING':
         return STATUS_MSG['MISSING']
 
-    surges_str = SURGES_TEMPLATE_HEADER
-
-    if options.last_bucket:
-        surges_str += " [in entire queue]\n"
-        surges_str += "%s\n" % ('=' * 75)
-    else:
-        last_mins = options.interval_size * (options.buckets_num - 1)
-        surges_str += " [in last %i minutes]\n" % last_mins
-        surges_str += "%s\n" % ('=' * 79)
-
-
-
-    for queue in queues_surged:
-        surges_str += SURGES_TEMPLATE % (queue.name,
-                                         queue.mails,
-                                         queue.newest,
-                                         queue.surges_warn,
-                                         queue.surges_crit)
+    stats_str = queues_surged[0].stats_header
+    interval_size = queues_surged[0].interval_size
 
     if status == 'CRIT':
-        surge_limit = options.crit_limit
+        surge_limit = queues_surged[0].crit_limit
     else:
-        surge_limit = options.warn_limit
+        surge_limit = queues_surged[0].warn_limit
 
-    return STATUS_MSG[status] % (surge_limit, options.interval_size, surges_str)
+    for queue in queues_surged:
+        stats_str += str(queue)
+
+    return STATUS_MSG[status] % (surge_limit, interval_size, stats_str)
 
 # =====================================================================
 
@@ -549,7 +548,7 @@ def main():
     status_msg = None
 
     if shutil.which('qshape') is None:
-        return 'MISSING', get_status_str('MISSING', None, None)
+        return 'MISSING', get_status_str('MISSING', None)
 
     queues = []
     queues_surged = []
@@ -571,7 +570,7 @@ def main():
                 status = 'WARN'
 
     # Return proper exit code & message:
-    status_msg = get_status_str(status, queues_surged, options)
+    status_msg = get_status_str(status, queues_surged)
 
     return status, status_msg
 
