@@ -14,7 +14,7 @@ TODO: DOCSTRING
 
 __version__ = '0.8'
 
-# --------------------------------------
+# =====================================================================
 
 import os
 import sys
@@ -27,7 +27,7 @@ from subprocess import run as RunProcess
 from tempfile   import SpooledTemporaryFile as TempFile
 from types      import SimpleNamespace
 
-# --------------------------------------
+# =====================================================================
 
 PROG = os.path.basename(__file__)
 
@@ -52,13 +52,9 @@ STATUS_MSG = {
     'UNKNOWN': "UNKNOWN: qshape subcommand failed to execute\n",
     'MISSING': "%s: error: qshape is missing or is not an executable\n" % PROG,
 
-    # 'ARGS' is omitted intentionally - see process() method of Params class.
-
+    #'ARGS':   is omitted intentionally - see the Params().process().
     'SIGINT':  "TODO",
 }
-
-SURGES_TEMPLATE_HEADER = "%+16s%+10s%+10s" % ('QUEUE NAME', 'WARN', 'CRIT')
-SURGES_TEMPLATE = "%+16s%10i%10i\n"
 
 POSTFIX_QUEUES = [
     'active',
@@ -68,7 +64,10 @@ POSTFIX_QUEUES = [
     'hold',
 ]
 
-# --------------------------------------
+SURGES_TEMPLATE_HEADER = "%+16s%+10s%+10s" % ('QUEUE NAME', 'WARN', 'CRIT')
+SURGES_TEMPLATE = "%+16s%10i%10i\n"
+
+# =====================================================================
 
 class Params():
     """\
@@ -281,6 +280,8 @@ TODO - epilogue
             metavar='DIR',
         )
 
+    # ----------------------------------
+
     def _postfix_queue(self, qname):
         # pylint: disable=no-self-use
         """Check if the specified queue name is a valid postfix queue."""
@@ -291,6 +292,8 @@ TODO - epilogue
 
         return qname
 
+    # ----------------------------------
+
     def process(self):
         # pylint: disable=too-many-branches
         """Runs the actual processing of the cmdline arguments."""
@@ -299,7 +302,8 @@ TODO - epilogue
             # Update our dictionary with parser's dictionary directly:
             self.__dict__.update(self._parser.parse_args().__dict__)
 
-            # We need root privileges, otherwise qshape output is empty:
+            # We need root privileges, otherwise
+            # the qshape output would be empty:
             if not 'SUDO_UID' in os.environ.keys():
                 self._parser.error("qshape requires root privileges")
 
@@ -312,8 +316,7 @@ TODO - epilogue
 
             if self.warn_limit != 0 and self.crit_limit != 0:
                 if self.warn_limit > self.crit_limit:
-                    self._parser.error("CRITICAL limit is lower than " \
-                                       "WARNING limit ")
+                    self._parser.error("CRITICAL limit is lower than WARNING limit")
 
             if self.top_domains < 0:
                 self._parser.error("top domains can't be a negative value")
@@ -326,15 +329,14 @@ TODO - epilogue
 
 
             # Make sure the config directory has necessary structure,
-            # and we can access it...
+            # and we can access its files for reading...
             if self.conf_dir:
                 if not os.path.isdir(self.conf_dir):
-                    self._parser.error("%s is not a directory" \
-                                       % self.conf_dir)
+                    self._parser.error("%s is not a directory" % self.conf_dir)
 
                 if not os.path.exists(self.conf_dir + '/main.cf'):
-                    self._parser.error("main.cf configuration file does not " \
-                                       "exists in: %s" % self.conf_dir)
+                    self._parser.error("main.cf configuration file does not exists in: %s"
+                                       % self.conf_dir)
 
                 if not os.access(self.conf_dir + '/master.cf', os.R_OK):
                     self._parser.error("can't open file '%s' for reading"
@@ -358,7 +360,7 @@ TODO - epilogue
         except SystemExit:
             sys.exit(EXIT_CODES['ARGS'])
 
-# --------------------------------------
+# =====================================================================
 
 class Queue(SimpleNamespace):
     """\
@@ -374,12 +376,12 @@ class Queue(SimpleNamespace):
         self.__dict__.update(options.__dict__)
 
         self.mails = 0          # total number of mails in the queue
-        self.newest = 0         # number of mails in first (newest) bucket
         self.oldest = 0         # number of mails in last (oldest) bucket
+        #self.newest = 0         # number of mails in first (newest) bucket
 
-        self.surges = 0         # total number of surges (warning and critical)
-        self.surges_warn = 0
-        self.surges_crit = 0
+        self.surges = 0         # total number of surges
+        self.surges_warn = 0    # number of warning surges
+        self.surges_crit = 0    # number of critical surges
 
         # Prepare the cmdline list to be used with subprocess later:
         self.cmdline = ['qshape']
@@ -403,8 +405,11 @@ class Queue(SimpleNamespace):
     def __str__(self):
         return "%s (#%i)" % (self.name, self.surges)
 
+    # ----------------------------------
 
     def _check_surge(self, mails):
+        """ TODO: DOCSTRING"""
+
         mails_num = int(mails)
 
         if self.crit_limit and mails_num > self.crit_limit:
@@ -413,6 +418,8 @@ class Queue(SimpleNamespace):
             self.surges_warn += 1
 
     def _display_queue(self, tmp_file):
+        """ TODO: DOCSTRING"""
+
         tmp_file.seek(0)
         header = tmp_file.readline()
 
@@ -436,6 +443,7 @@ class Queue(SimpleNamespace):
 
         print(" %s " % ('-' * (self.term_width - 2)))
 
+    # ----------------------------------
 
     def process(self):
         """ TODO: DOCSTRING """
@@ -444,19 +452,19 @@ class Queue(SimpleNamespace):
             with TempFile(mode='x+t', buffering=1, encoding='utf8',
                           suffix=self.name) as tmp_file:
 
-                # Run the qshape utility, and forward its output into tmp_file:
+                # Run the qshape utility:
                 RunProcess(self.cmdline, stdout=tmp_file, check=True,
                            encoding='utf8', errors='replace')
 
                 tmp_file.seek(0)
 
-                # We don't need the first line for anything...
+                # We don't need the first line for anything:
                 _ = tmp_file.readline().strip().split()[1:]
                 buckets = tmp_file.readline().strip().split()[1:]
 
                 self.mails = int(buckets[0])
-                self.newest = int(buckets[1])
                 self.oldest = int(buckets[-1])
+                #self.newest = int(buckets[1])
 
                 # Check the buckets for surges:
                 for mails in buckets[1:-1]:
@@ -477,7 +485,7 @@ class Queue(SimpleNamespace):
             sys.stderr.write("%s: error: %s\n" % (__file__, str(e)))
             sys.exit(EXIT_CODES['UNKNOWN'])
 
-# --------------------------------------
+# =====================================================================
 
 def get_status_str(status, queues_surged, options):
     """ TODO: DOCSTRING"""
@@ -507,7 +515,7 @@ def get_status_str(status, queues_surged, options):
 
     return STATUS_MSG[status] % (surge_limit, options.interval_size, surges_str)
 
-# --------------------------------------
+# =====================================================================
 
 def main():
     """ TODO: DOCSTRING """
@@ -547,7 +555,7 @@ def main():
 
     return status, status_msg
 
-# --------------------------------------
+# =====================================================================
 
 if __name__ == '__main__':
     # TODO: Add try-except block for CTRL+C
