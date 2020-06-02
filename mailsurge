@@ -1,0 +1,559 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# vim: filetype=python
+
+#
+# Author: Dee'Kej <devel@deekej.io>
+#
+
+# =====================================================================
+
+"""\
+TODO: DOCSTRING
+"""
+
+__version__ = '0.8'
+
+# --------------------------------------
+
+import os
+import sys
+
+import argparse
+import shutil
+
+from subprocess import CalledProcessError
+from subprocess import run as RunProcess
+from tempfile   import SpooledTemporaryFile as TempFile
+from types      import SimpleNamespace
+
+# --------------------------------------
+
+PROG = os.path.basename(__file__)
+
+EXIT_CODES = {
+    'OK':      0,
+    'WARN':    1,
+    'CRIT':    2,
+    'UNKNOWN': 3,
+    'MISSING': 127,
+    'ARGS':    128,
+    'SIGINT':  130,
+}
+
+STATUS_MSG = {
+    'OK':      "OK: postfix queues are in normal state\n",
+
+    'WARN':    "WARN: some mail queues exceeding warning threshold " \
+               "[%s mails / %s mins]\n%s",
+    'CRIT':    "CRIT: some mail queues exceeding critical threshold " \
+               "[%s mails / %s mins]\n%s",
+
+    'UNKNOWN': "UNKNOWN: qshape subcommand failed to execute\n",
+    'MISSING': "%s: error: qshape is missing or is not an executable\n" % PROG,
+
+    # 'ARGS' is omitted intentionally - see process() method of Params class.
+
+    'SIGINT':  "TODO",
+}
+
+SURGES_TEMPLATE_HEADER = "%+16s%+10s%+10s" % ('QUEUE NAME', 'WARN', 'CRIT')
+SURGES_TEMPLATE = "%+16s%10i%10i\n"
+
+POSTFIX_QUEUES = [
+    'active',
+    'maildrop',
+    'incoming',
+    'deferred',
+    'hold',
+]
+
+# --------------------------------------
+
+class Params():
+    """\
+    Auxiliary class for processing of cmdline arguments. The actual
+    processing is being done by calling the process() method.
+    """
+
+    # pylint: disable=too-few-public-methods
+
+    _help_usage = \
+"""\
+%(prog)s [-w LIMIT] [-c LIMIT] [-i MINUTES] [-b BUCKETS]
+                 [-v] [-o] [-g] [-l] [-C CONFIG_DIR] [<queue>...]
+"""
+
+    _help_descr = \
+"""\
+TODO - description
+"""
+
+    _help_epilog = \
+"""\
+TODO - epilogue
+"""
+
+    queues = []
+    verbose = None
+    term_width = None
+
+    warn_limit = None
+    crit_limit = None
+
+    interval_size = None
+    buckets_num = None
+    top_domains = None
+
+    origin_domain = None
+    linear_dist = None
+    last_bucket = None
+
+    conf_dir = None
+
+    def __init__(self):
+        """\
+        Initializes this class by preparing parser arguments so it can be
+        called later with Params.process() method.
+        """
+
+        self._parser = argparse.ArgumentParser(
+            prog=PROG,
+            usage=self._help_usage,
+            description=self._help_descr,
+            epilog=self._help_epilog,
+            formatter_class=argparse.RawTextHelpFormatter,
+        )
+
+        # Positional arguments:
+        self._parser.add_argument(
+            'queues',
+            help='optional list of postfix queues to be checked...\n' \
+                 '[default: %s]' % (' '.join(POSTFIX_QUEUES)),
+            type=self._postfix_queue,
+            nargs='*',
+            metavar='queues',
+            default=POSTFIX_QUEUES,
+        )
+
+        # Optional arguments:
+        self._parser.add_argument(
+            '-V', '--version',
+            help="show program's version number and exit\n\n",
+            action='version',
+            version="%(prog)s version {ver}".format(ver=__version__),
+        )
+
+        self._parser.add_argument(
+            '--warning',
+            help='# of newly arrived mails in each queue for ' \
+                 'a warning state\n[default: %(default)s]\n\n',
+            type=int,
+            dest='warn_limit',
+            metavar='LIMIT',
+            default=50,
+        )
+
+        self._parser.add_argument(
+            '--critical',
+            help='# of newly arrived mails in each queue for ' \
+                 'a critical state\n[default: %(default)s]\n\n',
+            type=int,
+            dest='crit_limit',
+            metavar='LIMIT',
+            default=100,
+        )
+
+        self._parser.add_argument(
+            '--interval',
+            help='size of latest time interval bucket [default: %(default)s]',
+            type=int,
+            dest='interval_size',
+            metavar='MINS',
+            default=15,
+        )
+
+        self._parser.add_argument(
+            '--buckets',
+            help='number of buckets to be used [default: %(default)s]\n\n',
+            type=int,
+            dest='buckets_num',
+            metavar='NUM',
+            default=9,
+        )
+
+        self._parser.add_argument(
+            '--top-domains',
+            help='display only the top NUM domains with --verbose enabled\n' \
+                 '[default: %(default)s]\n\n',
+            type=int,
+            dest='top_domains',
+            metavar='NUM',
+            default=10,
+        )
+
+        self._parser.add_argument(
+            '--config-dir',
+            help='path to alternative location of postfix config directory\n\n',
+            type=str,
+            dest='conf_dir',
+            metavar='DIR',
+        )
+
+        self._parser.add_argument(
+            '--origin', '-o',
+            help='check originator domain distribution instead of recipient',
+            dest='origin_domain',
+            action='store_true',
+            default=False,
+        )
+
+        self._parser.add_argument(
+            '--geometric', '-g',
+            help='use geometric age distribution for buckets',
+            dest='linear_dist',
+            action='store_false',
+            default=True,
+        )
+
+        self._parser.add_argument(
+            '--last-bucket', '-l',
+            help='check the last bucket for surges as well\n\n',
+            dest='last_bucket',
+            action='store_true',
+            default=False,
+        )
+
+        self._parser.add_argument(
+            '--verbose', '-v',
+            help='display output of qshape for specified postfix queues\n\n',
+            dest='verbose',
+            action='store_true',
+            default=False,
+        )
+
+        # Short options (displayed separately for more verbosity):
+        self._parser.add_argument(
+            '-w',
+            help='same as --warning option',
+            type=int,
+            dest='warn_limit',
+            metavar='LIMIT',
+        )
+
+        self._parser.add_argument(
+            '-c',
+            help='same as --critical option',
+            type=int,
+            dest='crit_limit',
+            metavar='LIMIT',
+        )
+
+        self._parser.add_argument(
+            '-i',
+            help='same as --interval option',
+            type=int,
+            dest='interval_size',
+            metavar='MINS',
+        )
+
+        self._parser.add_argument(
+            '-b',
+            help='same as --buckets option',
+            type=int,
+            dest='buckets_num',
+            metavar='NUM',
+        )
+
+        self._parser.add_argument(
+            '-t',
+            help='same as --top-domains option',
+            type=int,
+            dest='top_domains',
+            metavar='NUM',
+        )
+
+        self._parser.add_argument(
+            '-C',
+            help='same as --config option',
+            type=str,
+            dest='conf_dir',
+            metavar='DIR',
+        )
+
+    def _postfix_queue(self, qname):
+        # pylint: disable=no-self-use
+        """Check if the specified queue name is a valid postfix queue."""
+
+        if qname not in POSTFIX_QUEUES:
+            msg = "%r is not a valid postfix queue name" % (qname)
+            raise argparse.ArgumentTypeError(msg)
+
+        return qname
+
+    def process(self):
+        # pylint: disable=too-many-branches
+        """Runs the actual processing of the cmdline arguments."""
+
+        try:
+            # Update our dictionary with parser's dictionary directly:
+            self.__dict__.update(self._parser.parse_args().__dict__)
+
+            # We need root privileges, otherwise qshape output is empty:
+            if not 'SUDO_UID' in os.environ.keys():
+                self._parser.error("qshape requires root privileges")
+
+            # Test the validity of given arguments:
+            if self.warn_limit < 0:
+                self._parser.error("warning limit can't be a negative value")
+
+            if self.crit_limit < 0:
+                self._parser.error("critical limit can't be a negative value")
+
+            if self.warn_limit != 0 and self.crit_limit != 0:
+                if self.warn_limit > self.crit_limit:
+                    self._parser.error("CRITICAL limit is lower than " \
+                                       "WARNING limit ")
+
+            if self.top_domains < 0:
+                self._parser.error("top domains can't be a negative value")
+
+            if not self.interval_size > 0:
+                self._parser.error("interval size can't be negative or zero")
+
+            if not self.buckets_num > 1:
+                self._parser.error("buckets number must be bigger than 1")
+
+
+            # Make sure the config directory has necessary structure,
+            # and we can access it...
+            if self.conf_dir:
+                if not os.path.isdir(self.conf_dir):
+                    self._parser.error("%s is not a directory" \
+                                       % self.conf_dir)
+
+                if not os.path.exists(self.conf_dir + '/main.cf'):
+                    self._parser.error("main.cf configuration file does not " \
+                                       "exists in: %s" % self.conf_dir)
+
+                if not os.access(self.conf_dir + '/master.cf', os.R_OK):
+                    self._parser.error("can't open file '%s' for reading"
+                                       % (self.conf_dir + '/master.cf'))
+
+                if not os.access(self.conf_dir + '/main.cf', os.R_OK):
+                    self._parser.error("can't open file '%s' for reading"
+                                       % (self.conf_dir + '/main.cf'))
+
+            # Make sure our output is always wide as much as possible:
+            if self.term_width is None:
+                columns = shutil.get_terminal_size()[0]
+
+                if columns > 80:
+                    columns = 80
+
+                self.term_width = columns
+
+            return self
+
+        except SystemExit:
+            sys.exit(EXIT_CODES['ARGS'])
+
+# --------------------------------------
+
+class Queue(SimpleNamespace):
+    """\
+    TODO: DOCSTRING
+    """
+
+    # pylint: disable=too-many-instance-attributes
+
+    def __init__(self, name, options):
+        """ TODO: DOCSTRING"""
+
+        self.name = name
+        self.__dict__.update(options.__dict__)
+
+        self.mails = 0          # total number of mails in the queue
+        self.newest = 0         # number of mails in first (newest) bucket
+        self.oldest = 0         # number of mails in last (oldest) bucket
+
+        self.surges = 0         # total number of surges (warning and critical)
+        self.surges_warn = 0
+        self.surges_crit = 0
+
+        # Prepare the cmdline list to be used with subprocess later:
+        self.cmdline = ['qshape']
+
+        self.cmdline.extend(['-t', str(self.interval_size)])
+        self.cmdline.extend(['-b', str(self.buckets_num)])
+        self.cmdline.extend(['-w', str(self.term_width)])
+
+        if self.origin_domain:
+            self.cmdline.append('-s')
+
+        if self.linear_dist:
+            self.cmdline.append('-l')
+
+        if self.conf_dir:
+            self.cmdline.extend(['-c', self.conf_dir])
+
+        # Postfix queue name is a last (positional) argument of qshape:
+        self.cmdline.append(self.name)
+
+    def __str__(self):
+        return "%s (#%i)" % (self.name, self.surges)
+
+
+    def _check_surge(self, mails):
+        mails_num = int(mails)
+
+        if self.crit_limit and mails_num > self.crit_limit:
+            self.surges_crit += 1
+        elif self.warn_limit and mails_num > self.warn_limit:
+            self.surges_warn += 1
+
+    def _display_queue(self, tmp_file):
+        tmp_file.seek(0)
+        header = tmp_file.readline()
+
+        qname = "| %s QUEUE |" % self.name.upper()
+
+        qname_len = len(qname)
+        spaces_len = header.find('T')
+
+        ins_idx = (spaces_len - qname_len) // 2
+
+        if ins_idx > 0:
+            header = header[:ins_idx] + qname + header[ins_idx + qname_len:]
+        else:
+            header = self.name.upper() + header[len(self.name):]
+
+        sys.stdout.write("%s" % header)
+
+        for line in range(self.top_domains + 1):
+            line = tmp_file.readline()
+            sys.stdout.write(line)
+
+        print(" %s " % ('-' * (self.term_width - 2)))
+
+
+    def process(self):
+        """ TODO: DOCSTRING """
+
+        try:
+            with TempFile(mode='x+t', buffering=1, encoding='utf8',
+                          suffix=self.name) as tmp_file:
+
+                # Run the qshape utility, and forward its output into tmp_file:
+                RunProcess(self.cmdline, stdout=tmp_file, check=True,
+                           encoding='utf8', errors='replace')
+
+                tmp_file.seek(0)
+
+                # We don't need the first line for anything...
+                _ = tmp_file.readline().strip().split()[1:]
+                buckets = tmp_file.readline().strip().split()[1:]
+
+                self.mails = int(buckets[0])
+                self.newest = int(buckets[1])
+                self.oldest = int(buckets[-1])
+
+                # Check the buckets for surges:
+                for mails in buckets[1:-1]:
+                    self._check_surge(mails)
+
+                if self.last_bucket:
+                    self._check_surge(self.oldest // self.buckets_num)
+
+                self.surges = self.surges_warn + self.surges_crit
+
+                # Display the output of qshape if requested,
+                # and pretty print the current queue name & separator:
+                if self.verbose and self.mails > 0:
+                    self._display_queue(tmp_file)
+
+        # pylint: disable=invalid-name
+        except CalledProcessError as e:
+            sys.stderr.write("%s: error: %s\n" % (__file__, str(e)))
+            sys.exit(EXIT_CODES['UNKNOWN'])
+
+# --------------------------------------
+
+def get_status_str(status, queues_surged, options):
+    """ TODO: DOCSTRING"""
+
+    if status == 'OK':
+        return STATUS_MSG['OK']
+    if status == 'MISSING':
+        return STATUS_MSG['MISSING']
+
+    surges_str = SURGES_TEMPLATE_HEADER
+
+    if options.last_bucket:
+        surges_str += "      (# of surges in entire queue)\n"
+    else:
+        last_mins = options.interval_size * (options.buckets_num - 1)
+        surges_str += "      (# of surges in last %i minutes)\n" % last_mins
+
+    for queue in queues_surged:
+        surges_str += SURGES_TEMPLATE % (queue.name,
+                                         queue.surges_warn,
+                                         queue.surges_crit)
+
+    if status == 'CRIT':
+        surge_limit = options.crit_limit
+    else:
+        surge_limit = options.warn_limit
+
+    return STATUS_MSG[status] % (surge_limit, options.interval_size, surges_str)
+
+# --------------------------------------
+
+def main():
+    """ TODO: DOCSTRING """
+
+    options = Params().process()
+
+    status = 'OK'
+    status_msg = None
+
+    if shutil.which('qshape') is None:
+        status = 'MISSING'
+        status_msg = get_status_str(status, None, None)
+
+        return status, status_msg
+
+    queues = []
+    queues_surged = []
+
+    # Prepare the Queue objects:
+    for qname in options.queues:
+        queues.append(Queue(qname, options))
+
+    # Process the queues all at once:
+    for queue in queues:
+        queue.process()
+
+        if queue.surges > 0:
+            queues_surged.append(queue)
+
+            if queue.surges_crit > 0:
+                status = 'CRIT'
+            else:
+                status = 'WARN'
+
+    # Return proper exit code & message:
+    status_msg = get_status_str(status, queues_surged, options)
+
+    return status, status_msg
+
+# --------------------------------------
+
+if __name__ == '__main__':
+    # TODO: Add try-except block for CTRL+C
+
+    #pylint: disable=invalid-name
+    exit_status, exit_msg = main()
+
+    sys.stdout.write(exit_msg)
+    sys.exit(EXIT_CODES[exit_status])
